@@ -38,6 +38,8 @@ description: 使用者有上傳附件（檔案、圖片、截圖、PDF、Word、
 
 ## 4. 各類附件重點
 
+有安裝 **Office File Reader** 工具時，Word、Excel、PowerPoint、PDF、ODT/ODS/ODP、CSV 等檔案，依 `read-office-files` skill 用工具轉成 Markdown 讀取，不要只依賴對話中自動帶入的片段。
+
 | 類型 | 讀取重點 |
 |---|---|
 | 圖片 / 程式碼截圖 | 逐行辨識文字；看不清楚的地方明確指出是哪一行、哪個字，只針對那部分詢問，其他看得清楚的直接使用 |
