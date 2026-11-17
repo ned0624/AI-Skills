@@ -34,6 +34,12 @@
    - 檔案開頭的 `requirements:` 會讓 Open WebUI 自動安裝需要的 Python 套件
    - 伺服器不能連外網時，請先在 Open WebUI 的環境中手動安裝：
      `pip install python-docx openpyxl python-pptx pypdf pdfplumber odfpy xlrd`
+   - 確認套件是否都裝好：在 Open WebUI 的環境執行 `check_office_reader_deps.py`。Docker 安裝的話：
+     ```
+     docker cp check_office_reader_deps.py open-webui:/tmp/
+     docker exec open-webui python3 /tmp/check_office_reader_deps.py
+     ```
+     缺少套件時，最後會列出要執行的 `pip install` 指令（Docker 就在前面加上 `docker exec open-webui`）
 2. 要讀 .doc、.ppt、.rtf 舊版格式時，Open WebUI 伺服器（或容器）要安裝 LibreOffice，例如 Docker 映像中加入
    `apt-get install -y libreoffice-writer libreoffice-impress`
 3. 到 **工作區 → 模型**，編輯要使用的模型：
