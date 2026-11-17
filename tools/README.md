@@ -18,10 +18,10 @@
 | 類型 | 副檔名 | 使用的套件 |
 |---|---|---|
 | Word | docx、docm | python-docx |
-| Excel | xlsx、xlsm、xls | openpyxl、xlrd |
+| Excel | xlsx、xlsm、xls | openpyxl；.xls 用 xlrd，沒有 xlrd 時改用 LibreOffice 轉檔 |
 | PowerPoint | pptx、pptm | python-pptx |
 | PDF | pdf | pdfplumber：有框線的表格轉成 Markdown 表格，其餘文字依版面由上到下排列；沒有 pdfplumber 時改用 pypdf 只擷取文字。掃描檔沒有文字層，會提示需要 OCR |
-| OpenDocument | odt、ods、odp | odfpy |
+| OpenDocument | odt、ods、odp | Python 內建（zipfile + xml），不需要另外安裝 |
 | 舊版格式 | doc、rtf、wps、ppt、pps | 需要 LibreOffice，先轉成 docx / pptx 再讀 |
 | 其他 | csv、tsv、html、eml、zip（只列檔名）、txt、sql、log、json、xml、ktr、kjb、程式碼 | 內建 |
 
@@ -31,9 +31,13 @@
 ### 安裝
 
 1. Open WebUI 管理員進入 **工作區 → 工具 → 新增工具**，貼上 `office_file_reader.py` 的全部內容後儲存
-   - 檔案開頭的 `requirements:` 會讓 Open WebUI 自動安裝需要的 Python 套件
-   - 伺服器不能連外網時，請先在 Open WebUI 的環境中手動安裝：
-     `pip install python-docx openpyxl python-pptx pypdf pdfplumber odfpy xlrd`
+   - 檔案開頭的 `requirements:` 只列 Open WebUI 本身已內建的套件（python-docx、openpyxl、python-pptx、pypdf），儲存工具時不需要連外網
+   - 選用套件（沒有也能用，只是少了部分功能）：
+
+     | 套件 | 沒有時的影響 | Open WebUI 是否內建 |
+     |---|---|---|
+     | `pdfplumber` | PDF 的表格不會轉成 Markdown 表格，只擷取文字 | 否 |
+     | `xlrd` | .xls 改用 LibreOffice 轉檔；兩者都沒有時，請使用者另存為 .xlsx | 新版有 |
    - 確認套件是否都裝好：在 Open WebUI 的環境執行 `check_office_reader_deps.py`。Docker 安裝的話：
      ```
      docker cp check_office_reader_deps.py open-webui:/tmp/

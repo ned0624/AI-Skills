@@ -3,7 +3,7 @@ title: Office File Reader
 description: 讀取使用者上傳的 Office 與開源格式附件（Word、Excel、PowerPoint、PDF、ODT/ODS/ODP、CSV、文字檔等），轉成 Markdown 讓模型閱讀
 version: 1.0.0
 license: MIT
-requirements: python-docx, openpyxl, python-pptx, pypdf, pdfplumber, odfpy, xlrd
+requirements: python-docx, openpyxl, python-pptx, pypdf
 """
 
 import asyncio
@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+import xml.etree.ElementTree as ET
 from datetime import date, datetime, time
 from email import policy
 from html.parser import HTMLParser
@@ -293,86 +294,125 @@ def _pdf_to_md_text_only(path: str) -> str:
     return md
 
 
-def _odf_text(node) -> str:
-    from odf import teletype
-    return teletype.extractText(node).strip()
+# OpenDocument（odt / ods / odp）是 zip 包 XML，用標準函式庫直接解析
+ODF_NS = {
+    "office": "urn:oasis:names:tc:opendocument:xmlns:office:1.0",
+    "text": "urn:oasis:names:tc:opendocument:xmlns:text:1.0",
+    "table": "urn:oasis:names:tc:opendocument:xmlns:table:1.0",
+    "draw": "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0",
+    "presentation": "urn:oasis:names:tc:opendocument:xmlns:presentation:1.0",
+}
+
+
+def _q(tag: str) -> str:
+    """把 "text:p" 轉成 ElementTree 用的 "{命名空間}p"。"""
+    prefix, name = tag.split(":")
+    return "{%s}%s" % (ODF_NS[prefix], name)
+
+
+def _odf_body(path: str, kind: str):
+    with zipfile.ZipFile(path) as z:
+        root = ET.fromstring(z.read("content.xml"))
+    body = root.find(f"{_q('office:body')}/{_q('office:' + kind)}")
+    if body is None:
+        raise RuntimeError("OpenDocument 檔案格式不正確，找不到內容")
+    return body
+
+
+def _odf_text(el) -> str:
+    """取出元素內的文字，處理空白（text:s）、Tab、換行與多個段落。"""
+    parts = []
+    para_tags = (_q("text:p"), _q("text:h"))
+
+    def walk(e):
+        if e.tag == _q("text:s"):
+            parts.append(" " * int(e.get(_q("text:c"), "1")))
+            return
+        if e.tag == _q("text:tab"):
+            parts.append("\t")
+            return
+        if e.tag == _q("text:line-break"):
+            parts.append("\n")
+            return
+        if e.text:
+            parts.append(e.text)
+        for child in e:
+            if child.tag in para_tags and parts and not parts[-1].endswith("\n"):
+                parts.append("\n")
+            walk(child)
+            if child.tail:
+                parts.append(child.tail)
+
+    walk(el)
+    return "".join(parts).strip()
 
 
 def _odt_to_md(path: str) -> str:
-    from odf.opendocument import load
-    from odf.namespaces import TABLENS, TEXTNS
-
-    doc = load(path)
     out = []
 
-    def walk(node, depth=0):
-        for child in node.childNodes:
-            if child.nodeType != child.ELEMENT_NODE:
+    def walk_list(lst, depth):
+        for item in lst:
+            if item.tag not in (_q("text:list-item"), _q("text:list-header")):
                 continue
-            ns, name = child.qname
-            if ns == TEXTNS and name == "h":
-                level = int(child.getAttrNS(TEXTNS, "outline-level") or 1)
+            for child in item:
+                if child.tag == _q("text:list"):
+                    walk_list(child, depth + 1)
+                else:
+                    t = _odf_text(child)
+                    if t:
+                        out.append("  " * depth + "- " + t)
+
+    def walk(node):
+        for child in node:
+            if child.tag == _q("text:h"):
+                level = int(child.get(_q("text:outline-level"), "1"))
                 out.append("#" * min(level + 1, 6) + " " + _odf_text(child))
-            elif ns == TEXTNS and name == "p":
+            elif child.tag == _q("text:p"):
                 t = _odf_text(child)
                 if t:
                     out.append(t)
-            elif ns == TEXTNS and name == "list":
-                for item in child.childNodes:
-                    if item.nodeType == item.ELEMENT_NODE and item.qname[1] == "list-item":
-                        t = _odf_text(item)
-                        if t:
-                            out.append("  " * depth + "- " + t)
-            elif ns == TABLENS and name == "table":
+            elif child.tag == _q("text:list"):
+                walk_list(child, 0)
+            elif child.tag == _q("table:table"):
                 out.append(_md_table(_ods_table_rows(child)))
             else:
-                walk(child, depth)
+                walk(child)  # 例如 text:section
 
-    walk(doc.text)
+    walk(_odf_body(path, "text"))
     return "\n\n".join(out)
 
 
 def _odp_to_md(path: str) -> str:
-    from odf.opendocument import load
-    from odf.namespaces import DRAWNS, PRESENTATIONNS, TABLENS, TEXTNS
-    from odf import draw
-    from odf.text import P
-
-    doc = load(path)
     out = []
 
     def frames(node):
         """投影片上的文字框與表格（含群組內的），不含備註頁。"""
-        for child in node.childNodes:
-            if child.nodeType != child.ELEMENT_NODE:
-                continue
-            if child.qname == (DRAWNS, "frame"):
+        for child in node:
+            if child.tag == _q("draw:frame"):
                 yield child
-            elif child.qname == (DRAWNS, "g"):
+            elif child.tag == _q("draw:g"):
                 yield from frames(child)
 
     def paragraphs(node):
-        return [_odf_text(p) for p in node.getElementsByType(P)]
+        return [_odf_text(p) for p in node.iter(_q("text:p"))]
 
-    for i, page in enumerate(doc.getElementsByType(draw.Page), 1):
+    for i, page in enumerate(_odf_body(path, "presentation").iter(_q("draw:page")), 1):
         title, lines = "", []
         for fr in frames(page):
-            cls = fr.getAttrNS(PRESENTATIONNS, "class") or ""
-            tables = [c for c in fr.childNodes if getattr(c, "qname", None) == (TABLENS, "table")]
-            if tables:
-                lines.append(_md_table(_ods_table_rows(tables[0])))
+            cls = fr.get(_q("presentation:class"), "")
+            table = fr.find(_q("table:table"))
+            if table is not None:
+                lines.append(_md_table(_ods_table_rows(table)))
             elif cls == "title" and not title:
                 title = " ".join(t for t in paragraphs(fr) if t)
             elif cls not in ("page-number", "date-time", "footer", "header"):
                 lines.extend("- " + t for t in paragraphs(fr) if t)
         out.append(f"## 投影片 {i}" + (f"：{title}" if title else ""))
         out.extend(lines)
-        for notes in page.childNodes:
-            if getattr(notes, "qname", None) != (PRESENTATIONNS, "notes"):
-                continue
+        for notes in page.findall(_q("presentation:notes")):
             texts = [
-                t for fr in notes.getElementsByType(draw.Frame)
-                if (fr.getAttrNS(PRESENTATIONNS, "class") or "") == "notes"
+                t for fr in notes.iter(_q("draw:frame"))
+                if fr.get(_q("presentation:class"), "") == "notes"
                 for t in paragraphs(fr) if t
             ]
             if texts:
@@ -436,28 +476,23 @@ def _zip_to_md(path: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _ods_table_rows(table, max_rows: int = 1_000_000) -> list:
-    from odf.namespaces import OFFICENS, TABLENS
-
     rows = []
-    for row in table.childNodes:
-        if row.nodeType != row.ELEMENT_NODE:
-            continue
-        if row.qname[1] == "table-header-rows" or row.qname[1] == "table-row-group":
+    for row in table:
+        if row.tag in (_q("table:table-header-rows"), _q("table:table-row-group"), _q("table:table-rows")):
             rows.extend(_ods_table_rows(row, max_rows))
             continue
-        if row.qname[1] != "table-row":
+        if row.tag != _q("table:table-row"):
             continue
         cells = []
-        for cell in row.childNodes:
-            if cell.nodeType != cell.ELEMENT_NODE or cell.qname[1] not in ("table-cell", "covered-table-cell"):
+        for cell in row:
+            if cell.tag not in (_q("table:table-cell"), _q("table:covered-table-cell")):
                 continue
-            vtype = cell.getAttrNS(OFFICENS, "value-type")
             text = _odf_text(cell)
-            if vtype == "date":
-                text = (cell.getAttrNS(OFFICENS, "date-value") or text).replace("T00:00:00", "")
-            rep = int(cell.getAttrNS(TABLENS, "number-columns-repeated") or 1)
+            if cell.get(_q("office:value-type")) == "date":
+                text = (cell.get(_q("office:date-value")) or text).replace("T00:00:00", "")
+            rep = int(cell.get(_q("table:number-columns-repeated"), "1"))
             cells.extend([text] * min(rep, 1024))
-        rrep = int(row.getAttrNS(TABLENS, "number-rows-repeated") or 1)
+        rrep = int(row.get(_q("table:number-rows-repeated"), "1"))
         if not any(c.strip() for c in cells):
             rrep = min(rrep, 1)  # 大量重複的空白列只保留一列
         for _ in range(min(rrep, max_rows)):
@@ -467,7 +502,7 @@ def _ods_table_rows(table, max_rows: int = 1_000_000) -> list:
     return _trim_rows(rows)
 
 
-def _load_sheets(path: str, ext: str) -> dict:
+def _load_sheets(path: str, ext: str, soffice: str = "soffice") -> dict:
     sheets = {}
     if ext in (".xlsx", ".xlsm"):
         import openpyxl
@@ -478,7 +513,10 @@ def _load_sheets(path: str, ext: str) -> dict:
             sheets[ws.title] = _trim_rows(rows)
         wb.close()
     elif ext == ".xls":
-        import xlrd
+        try:
+            import xlrd
+        except ImportError:  # 沒有 xlrd 就用 LibreOffice 轉成 xlsx 再讀
+            return _load_sheets(_soffice_convert(path, "xlsx", soffice), ".xlsx")
 
         book = xlrd.open_workbook(path, formatting_info=True)
 
@@ -501,13 +539,8 @@ def _load_sheets(path: str, ext: str) -> dict:
                 rows.append(row)
             sheets[sh.name] = _trim_rows(rows)
     elif ext == ".ods":
-        from odf.opendocument import load
-        from odf.namespaces import TABLENS
-        from odf.table import Table
-
-        doc = load(path)
-        for t in doc.spreadsheet.getElementsByType(Table):
-            sheets[t.getAttrNS(TABLENS, "name")] = _ods_table_rows(t)
+        for t in _odf_body(path, "spreadsheet").findall(_q("table:table")):
+            sheets[t.get(_q("table:name"), "")] = _ods_table_rows(t)
     elif ext in (".csv", ".tsv"):
         text = _read_text(path)
         if ext == ".tsv":
@@ -550,9 +583,7 @@ def convert_to_markdown(path: str, filename: str, preview_rows: int = 100, soffi
         return _docx_to_md(path)
     if ext in EXCEL_EXT or ext in (".xls", ".ods", ".csv", ".tsv"):
         try:
-            return _sheets_to_md(_load_sheets(path, ext), preview_rows)
-        except ImportError:
-            raise
+            return _sheets_to_md(_load_sheets(path, ext, soffice), preview_rows)
         except Exception:
             if ext == ".xls":  # 部分 .xls 其實是 HTML 或新格式，改用 LibreOffice 轉
                 return _sheets_to_md(_load_sheets(_soffice_convert(path, "xlsx", soffice), ".xlsx"), preview_rows)
@@ -801,7 +832,7 @@ class Tools:
             if ext not in SHEET_EXT:
                 return f"{entry['name']} 不是試算表，請改用 read_attachment。"
             path = await self._local_path(entry, __user__)
-            sheets = await asyncio.to_thread(_load_sheets, path, ext)
+            sheets = await asyncio.to_thread(_load_sheets, path, ext, self.valves.SOFFICE_PATH)
             if not sheets:
                 return "試算表中沒有工作表。"
             name = sheet_name or next(iter(sheets))
