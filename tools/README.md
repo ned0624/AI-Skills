@@ -20,7 +20,7 @@
 | Word | docx、docm | python-docx |
 | Excel | xlsx、xlsm、xls | openpyxl、xlrd |
 | PowerPoint | pptx、pptm | python-pptx |
-| PDF | pdf | pypdf（掃描檔沒有文字層，會提示需要 OCR） |
+| PDF | pdf | pdfplumber：有框線的表格轉成 Markdown 表格，其餘文字依版面由上到下排列；沒有 pdfplumber 時改用 pypdf 只擷取文字。掃描檔沒有文字層，會提示需要 OCR |
 | OpenDocument | odt、ods、odp | odfpy |
 | 舊版格式 | doc、rtf、wps、ppt、pps | 需要 LibreOffice，先轉成 docx / pptx 再讀 |
 | 其他 | csv、tsv、html、eml、zip（只列檔名）、txt、sql、log、json、xml、ktr、kjb、程式碼 | 內建 |
@@ -33,7 +33,7 @@
 1. Open WebUI 管理員進入 **工作區 → 工具 → 新增工具**，貼上 `office_file_reader.py` 的全部內容後儲存
    - 檔案開頭的 `requirements:` 會讓 Open WebUI 自動安裝需要的 Python 套件
    - 伺服器不能連外網時，請先在 Open WebUI 的環境中手動安裝：
-     `pip install python-docx openpyxl python-pptx pypdf odfpy xlrd`
+     `pip install python-docx openpyxl python-pptx pypdf pdfplumber odfpy xlrd`
 2. 要讀 .doc、.ppt、.rtf 舊版格式時，Open WebUI 伺服器（或容器）要安裝 LibreOffice，例如 Docker 映像中加入
    `apt-get install -y libreoffice-writer libreoffice-impress`
 3. 到 **工作區 → 模型**，編輯要使用的模型：

@@ -29,7 +29,7 @@ description: 使用者上傳 Office 或開源格式附件（Word、Excel、Power
 |---|---|---|---|
 | 文件 | docx、doc、rtf、odt | `read_attachment` | 有下一段且需要時，用 `part` 繼續讀 |
 | 簡報 | pptx、ppt、odp | `read_attachment` | 同上，每張投影片會標示「投影片 N」 |
-| PDF | pdf | `read_attachment` | 同上，每頁會標示「第 N 頁」 |
+| PDF | pdf | `read_attachment` | 同上，每頁會標示「第 N 頁」；有框線的表格會轉成 Markdown 表格，沒有框線的表格會是一行一行的文字，要自行對照欄位 |
 | 試算表 | xlsx、xls、ods、csv、tsv | `read_attachment`（看有哪些工作表、欄位與前幾筆） | 需要更多資料時用 `read_spreadsheet` 分批讀 |
 | 文字類 | txt、sql、log、json、xml、ktr、kjb、java、js、py…… | `read_attachment` | 很長的 log 先用 `search_attachment` 找 ERROR、ORA- |
 | 網頁、郵件 | html、htm、eml | `read_attachment` | |

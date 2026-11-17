@@ -3,7 +3,7 @@ title: Office File Reader
 description: 讀取使用者上傳的 Office 與開源格式附件（Word、Excel、PowerPoint、PDF、ODT/ODS/ODP、CSV、文字檔等），轉成 Markdown 讓模型閱讀
 version: 1.0.0
 license: MIT
-requirements: python-docx, openpyxl, python-pptx, pypdf, odfpy, xlrd
+requirements: python-docx, openpyxl, python-pptx, pypdf, pdfplumber, odfpy, xlrd
 """
 
 import asyncio
@@ -217,13 +217,67 @@ def _pptx_to_md(path: str) -> str:
 
 
 def _pdf_to_md(path: str) -> str:
+    """優先用 pdfplumber（可辨識有框線的表格），失敗時改用 pypdf 只擷取文字。"""
+    try:
+        import pdfplumber
+    except ImportError:
+        return _pdf_to_md_text_only(path)
+    try:
+        return _pdf_to_md_with_tables(pdfplumber, path)
+    except Exception:
+        return _pdf_to_md_text_only(path)  # 加密、格式異常等情況交給 pypdf 處理並回報原因
+
+
+def _pdf_to_md_with_tables(pdfplumber, path: str) -> str:
+    out, total_chars = [], 0
+    with pdfplumber.open(path) as pdf:
+        for i, page in enumerate(pdf.pages, 1):
+            items = []  # (上緣位置, 內容)，依由上到下排序
+            boxes = []
+            for tb in page.find_tables():
+                rows = [[c or "" for c in r] for r in tb.extract()]
+                # 只有一列或一欄的通常是誤判的外框，當成一般文字處理
+                if len(rows) < 2 or max((len(r) for r in rows), default=0) < 2:
+                    continue
+                boxes.append(tb.bbox)
+                items.append((tb.bbox[1], _md_table(rows)))
+
+            def outside(obj, boxes=boxes):
+                cx = (obj["x0"] + obj["x1"]) / 2
+                cy = (obj["top"] + obj["bottom"]) / 2
+                return not any(x0 <= cx <= x1 and top <= cy <= bottom for x0, top, x1, bottom in boxes)
+
+            text_page = page.filter(outside) if boxes else page
+            for line in text_page.extract_text_lines():
+                t = line["text"].strip()
+                if t:
+                    items.append((line["top"], t))
+            items.sort(key=lambda x: x[0])
+            # 表格前後空一行，Markdown 才會正確顯示
+            body = "\n".join(f"\n{c}\n" if c.startswith("|") else c for _, c in items).strip()
+            total_chars += sum(len(c) for _, c in items)
+            out.append(f"## 第 {i} 頁\n\n{body if body else '（此頁沒有可擷取的文字）'}")
+        n_pages = len(pdf.pages)
+
+    md = "\n\n".join(out)
+    if n_pages and total_chars / n_pages < 20:
+        md = (
+            "> ⚠️ 這份 PDF 幾乎沒有文字層，可能是掃描檔或圖片，需要 OCR 才能讀取內容。"
+            "請告知使用者改提供文字版或 Word 檔。\n\n" + md
+        )
+    return md
+
+
+def _pdf_to_md_text_only(path: str) -> str:
     from pypdf import PdfReader
 
     reader = PdfReader(path)
     if reader.is_encrypted:
         try:
-            reader.decrypt("")
+            ok = reader.decrypt("")  # 只有「開啟不需密碼、僅限制編輯」的 PDF 能用空密碼解開
         except Exception:
+            ok = 0
+        if not ok:
             raise RuntimeError("PDF 有密碼保護，無法讀取。請使用者提供未加密的檔案")
     out, total_chars = [], 0
     for i, page in enumerate(reader.pages, 1):
