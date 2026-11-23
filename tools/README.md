@@ -104,3 +104,34 @@
 | `MAX_CHARS` | 12000 | 每次回傳的最大字數 |
 | `MAX_ENTRY_CHARS` | 60000 | 每筆記憶最多保存的字數 |
 | `MAX_ENTRIES` | 40 | 每個對話最多保存幾筆記憶 |
+
+---
+
+## mermaid_builder.py — Mermaid Builder
+
+產生語法正確的 Mermaid 圖，Open WebUI 會直接把 mermaid 程式碼區塊畫成圖，搭配 `skills/mermaid/SKILL.md` 使用。只用 Python 內建模組，不需要安裝任何套件。
+
+小模型手寫 Mermaid 很容易因為括號、冒號、保留字 `end`、全形符號而顯示失敗，這個工具讓模型只需要用簡單格式描述內容，語法交給工具處理。
+
+### 提供的工具
+
+| 工具 | 用途 |
+|---|---|
+| `build_flowchart` | 用「步驟A -> 步驟B : 連線文字」的格式產生流程圖，支援判斷、資料庫、子流程等形狀與分組 |
+| `build_sequence_diagram` | 用「A -> B : 訊息」的格式產生循序圖，支援 alt / loop / opt 區塊與備註 |
+| `build_er_diagram` | 從 DDL（CREATE TABLE、ALTER TABLE ... FOREIGN KEY、COMMENT ON COLUMN）產生 ER 圖，標示 PK、FK、欄位說明與關聯 |
+| `build_gantt` | 用「任務 \| 開始日期 \| 天數 \| 狀態」的格式產生甘特圖 |
+| `check_mermaid` | 檢查並修正 Mermaid 的常見錯誤，列出修改了哪些地方 |
+
+### 測試方式
+
+產生的圖都用 Mermaid 11（Open WebUI 使用的版本）在瀏覽器中實際解析與繪製驗證過，包含：
+- 各工具產生的流程圖、循序圖、ER 圖、甘特圖
+- 模型常寫錯的寫法（括號在節點文字中、保留字 `end`、訊息含 `;` `#`、少了 `end`）經 `check_mermaid` 修正後都能正常顯示
+- 已經正確的圖再經過 `check_mermaid` 不會被改壞
+
+### 安裝
+
+1. **工作區 → 工具 → 新增工具**，貼上 `mermaid_builder.py` 的全部內容後儲存
+2. **工作區 → 模型**，勾選 **Mermaid Builder** 工具，Function Calling 設為 **Native**
+3. 在 **技能** 中加入 `mermaid`
