@@ -227,6 +227,31 @@ def _mermaid(edges: list) -> str:
     return "\n".join(lines)
 
 
+def combined_mermaid(parsed: list) -> str:
+    """多個 Kettle 檔畫成一張圖：每個檔案一個分組，作業呼叫的轉換或作業用虛線連到該檔案的分組。"""
+    def esc(text):
+        return str(text).replace('"', "#quot;")
+
+    lines, ids, groups = ["flowchart TD"], {}, {}
+    for fi, (fname, info) in enumerate(parsed):
+        groups[fname] = f"f{fi}"
+        lines.append(f'    subgraph f{fi}["{esc(fname)}"]')
+        for j, n in enumerate(info["nodes"]):
+            ids[(fname, n)] = f"f{fi}n{j}"
+            lines.append(f'        f{fi}n{j}["{esc(n)}"]')
+        for a, b, label in info["edges"]:
+            if (fname, a) in ids and (fname, b) in ids:
+                arrow = "-.->" if label in ("失敗時", "錯誤資料") else "-->"
+                mid = f' {arrow}|"{esc(label)}"| ' if label else f" {arrow} "
+                lines.append(f"        {ids[(fname, a)]}{mid}{ids[(fname, b)]}")
+        lines.append("    end")
+    for fname, info in parsed:
+        for entry, target in info["entry_files"].items():
+            if target in groups and (fname, entry) in ids:
+                lines.append(f'    {ids[(fname, entry)]} -.->|"執行"| {groups[target]}')
+    return "```mermaid\n" + "\n".join(lines) + "\n```"
+
+
 # ---------------------------------------------------------------------------
 # 解析 .ktr / .kjb
 # ---------------------------------------------------------------------------
@@ -308,7 +333,8 @@ def _analyze_ktr(root, raw: str, filename: str) -> dict:
             meta.append(f"- 說明：{_t(s, 'description')}")
         details.append(head + "\n" + "\n".join(meta + _settings_md(s, NOISE_TAGS)))
     return {"kind": "轉換", "name": name, "overview": "\n\n".join(overview),
-            "details": "\n\n".join(details), "referenced_files": []}
+            "details": "\n\n".join(details), "referenced_files": [],
+            "nodes": order, "edges": edges, "entry_files": {}}
 
 
 def _analyze_kjb(root, raw: str, filename: str) -> dict:
@@ -357,8 +383,14 @@ def _analyze_kjb(root, raw: str, filename: str) -> dict:
         n, t = _t(e, "name"), _t(e, "type")
         meta = [f"- 連線：{_t(e, 'connection')}"] if _t(e, "connection") else []
         details.append(f"## {n}（{JOB_ENTRY_TYPES.get(t, t)}，{t}）\n" + "\n".join(meta + _settings_md(e, NOISE_TAGS)))
+    entry_files = {}
+    for e in entries:
+        fn = _t(e, "filename") or _t(e, "transname") or _t(e, "jobname")
+        if fn and _t(e, "type") in ("TRANS", "JOB"):
+            entry_files[_t(e, "name")] = os.path.basename(fn.replace("\\", "/"))
     return {"kind": "作業", "name": name, "overview": "\n\n".join(overview),
-            "details": "\n\n".join(details), "referenced_files": referenced}
+            "details": "\n\n".join(details), "referenced_files": referenced,
+            "nodes": order, "edges": edges, "entry_files": entry_files}
 
 
 # ---------------------------------------------------------------------------
@@ -542,13 +574,15 @@ class Tools:
             else:
                 memory_note = ""
 
-            results, referenced = [], []
+            results, referenced, parsed = [], [], []
             for entry in entries:
                 path = await self._local_path(entry, __user__)
                 with open(path, "rb") as f:
                     raw_bytes = f.read()
                 digest = hashlib.sha256(raw_bytes).hexdigest()
                 title = f"{entry['name']} 流程"
+                if len(entries) > 1:  # 畫整體流程圖用；解析很快，不影響記憶的使用
+                    parsed.append((entry["name"], analyze_kettle_xml(raw_bytes.decode("utf-8", errors="replace"), entry["name"])))
                 cached = stored.get(title)
                 if cached and cached.get("sha256") == digest and not refresh:
                     results.append(cached["content"] + "\n\n> （從這個對話的記憶取出，檔案內容沒有變更，未重新解析）")
@@ -573,6 +607,13 @@ class Tools:
             if mem:
                 tail.append("> 各步驟的詳細設定（SQL、欄位對應等）已存入記憶，需要時用 "
                             "read_chat_memory(title=\"檔名 步驟設定\") 讀取。")
+            if parsed:
+                overall = ("# 整體流程圖（所有上傳的 Kettle 檔）\n"
+                           "> 每個檔案是一個分組，虛線「執行」表示作業呼叫該檔案，虛線「失敗時」是失敗路徑。"
+                           "請直接使用這張圖，不要自己重畫。\n\n" + combined_mermaid(parsed))
+                results.insert(0, overall)
+                if mem:
+                    self._put(mem, "整體流程圖", overall)
             body = "\n\n---\n\n".join(results)
             return self._fit(body, "完整內容已存入記憶，可用 read_chat_memory 分批讀取。") + \
                 ("\n\n" + "\n".join(tail) if tail else "") + memory_note

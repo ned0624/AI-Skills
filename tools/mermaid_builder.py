@@ -43,22 +43,35 @@ def flowchart(steps: str, direction: str = "TD") -> str:
         ids[text] = f"n{len(ids) + 1}"
         return f"{ids[text]}{shape[0]}{_q(text)}{shape[1]}"  # 第一次出現時定義節點
 
+    depth = 0
     for line in str(steps).splitlines():
         line = line.strip()
+        if line.lower().startswith("subgraph "):  # 分組開始，例如「subgraph 主作業」
+            out.append("    " * (depth + 1) + f"subgraph g{len(out)}[{_q(line[9:])}]")
+            depth += 1
+            continue
+        if line.lower() == "end" and depth:
+            depth -= 1
+            out.append("    " * (depth + 1) + "end")
+            continue
         if not line or "->" not in line and "→" not in line:
             continue
-        parts = re.split(r"\s*(?:-+>|→)\s*", line)  # ->、-->、→ 都可以
+        parts = re.split(r"\s*(-\.->|-+>|→)\s*", line)  # -.-> 虛線；->、-->、→ 實線
         label = ""
         m = re.match(r"^(.*?)\s*[:：]\s*(.+)$", parts[-1])
         if m:
             parts[-1], label = m.group(1), m.group(2)
-        names = [node(p) for p in parts if p.strip()]
-        for i in range(len(names) - 1):
+        names = [node(p) for p in parts[0::2]]
+        for i, arrow in enumerate(parts[1::2]):
+            arrow = "-.->" if arrow == "-.->" else "-->"
             text = label if i == len(names) - 2 else ""
-            arrow = f" -->|{_q(text)}| " if text else " --> "
+            mid = f" {arrow}|{_q(text)}| " if text else f" {arrow} "
             left = names[i] if i == 0 else names[i].split("[")[0].split("(")[0].split("{")[0]  # 已定義過只寫 ID
-            out.append(f"    {left}{arrow}{names[i + 1]}")
-    if not out:
+            out.append("    " * (depth + 1) + f"{left}{mid}{names[i + 1]}")
+    while depth:
+        depth -= 1
+        out.append("    " * (depth + 1) + "end")
+    if not any("--" in line for line in out):
         return ""
     direction = direction.upper() if direction.upper() in ("TD", "LR") else "TD"
     return f"flowchart {direction}\n" + "\n".join(out)
@@ -207,7 +220,7 @@ def check(code: str) -> tuple:
             if not new.strip().lower().startswith(("subgraph", "style", "classdef", "class ", "click", "linkstyle")):
                 new = _quote_nodes(new)
             if new != line:
-                fixes.append(f"第 {n} 行：文字加上引號或避開保留字 end")
+                fixes.append(f"第 {n} 行：文字加上引號" + ("，保留字 end 改成 end_node" if "end_node" in new else ""))
                 lines[n - 1] = new
         opened = sum(l.strip().lower().startswith("subgraph") for l in lines)
         closed = sum(l.strip() == "end" for l in lines)
@@ -237,9 +250,10 @@ class Tools:
     async def draw_mermaid(self, kind: str, content: str, direction: str = "TD") -> str:
         """
         產生語法正確的 Mermaid 圖。
-        kind="流程圖"：content 一行一條流程，用 -> 連接，連線文字寫在冒號後，例如
+        kind="流程圖"：content 一行一條流程，用 -> 連接（失敗或例外路徑用虛線 -.->），連線文字寫在冒號後，例如
           「開始 -> 填寫請假單 -> {主管審核}」換行「{主管審核} -> 結束 : 同意」。
           {文字} 是判斷、[(文字)] 是資料庫；開始、結束與問號結尾的文字會自動套用形狀。
+          要分組時用「subgraph 名稱」開始、「end」結束。
         kind="ER圖"：content 放資料表的 DDL（CREATE TABLE、ALTER TABLE ... FOREIGN KEY、COMMENT ON COLUMN）。
         :param kind: 流程圖 或 ER圖
         :param content: 流程內容或 DDL
