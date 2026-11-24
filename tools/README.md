@@ -111,27 +111,21 @@
 
 產生語法正確的 Mermaid 圖，Open WebUI 會直接把 mermaid 程式碼區塊畫成圖，搭配 `skills/mermaid/SKILL.md` 使用。只用 Python 內建模組，不需要安裝任何套件。
 
-小模型手寫 Mermaid 很容易因為括號、冒號、保留字 `end`、全形符號而顯示失敗，這個工具讓模型只需要用簡單格式描述內容，語法交給工具處理。
-
 ### 提供的工具
 
 | 工具 | 用途 |
 |---|---|
-| `build_flowchart` | 用「步驟A -> 步驟B : 連線文字」的格式產生流程圖，支援判斷、資料庫、子流程等形狀與分組 |
-| `build_sequence_diagram` | 用「A -> B : 訊息」的格式產生循序圖，支援 alt / loop / opt 區塊與備註 |
-| `build_er_diagram` | 從 DDL（CREATE TABLE、ALTER TABLE ... FOREIGN KEY、COMMENT ON COLUMN）產生 ER 圖，標示 PK、FK、欄位說明與關聯 |
-| `build_gantt` | 用「任務 \| 開始日期 \| 天數 \| 狀態」的格式產生甘特圖 |
-| `check_mermaid` | 檢查並修正 Mermaid 的常見錯誤，列出修改了哪些地方 |
+| `draw_mermaid` | `kind="流程圖"`：用「步驟A -> 步驟B : 連線文字」的格式產生流程圖；`kind="ER圖"`：從 DDL 產生 ER 圖，標示 PK、FK、欄位說明與關聯 |
+| `check_mermaid` | 檢查並修正模型自己寫的或使用者貼上的 Mermaid：節點文字的括號與冒號、保留字 `end`、全形符號、訊息中的 `;` `#`、少了 `end` |
+
+循序圖、甘特圖的語法本身就簡單，由模型照 skill 中的範本直接寫，再交給 `check_mermaid` 檢查。
 
 ### 測試方式
 
-產生的圖都用 Mermaid 11（Open WebUI 使用的版本）在瀏覽器中實際解析與繪製驗證過，包含：
-- 各工具產生的流程圖、循序圖、ER 圖、甘特圖
-- 模型常寫錯的寫法（括號在節點文字中、保留字 `end`、訊息含 `;` `#`、少了 `end`）經 `check_mermaid` 修正後都能正常顯示
-- 已經正確的圖再經過 `check_mermaid` 不會被改壞
+用 Mermaid 11.17（Open WebUI 使用的版本）在瀏覽器中實際解析與繪製驗證：工具產生的流程圖與 ER 圖、模型常寫錯的寫法經 `check_mermaid` 修正後、已經正確的圖再檢查一次，以及 skill 中的循序圖與甘特圖範本，全部都能正常顯示。
 
 ### 安裝
 
-1. **工作區 → 工具 → 新增工具**，貼上 `mermaid_builder.py` 的全部內容後儲存
+1. **工作區 → 工具 → 新增工具**，貼上 `mermaid_builder.py` 的全部內容後儲存（舊版請直接覆蓋）
 2. **工作區 → 模型**，勾選 **Mermaid Builder** 工具，Function Calling 設為 **Native**
-3. 在 **技能** 中加入 `mermaid`
+3. 在 **技能** 中加入 `mermaid`（舊版請改成新內容）
