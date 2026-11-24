@@ -77,6 +77,29 @@ def flowchart(steps: str, direction: str = "TD") -> str:
     return f"flowchart {direction}\n" + "\n".join(out)
 
 
+def split_groups(steps: str) -> list:
+    """把最外層的每個 subgraph 拆成一張圖：回傳 [(標題, 內容)]；分組外的連線另成一張「各流程之間的關係」。"""
+    groups, outside, current, depth = [], [], None, 0
+    for line in str(steps).splitlines():
+        low = line.strip().lower()
+        if low.startswith("subgraph "):
+            depth += 1
+            if depth == 1:
+                current = [line.strip()[9:].strip(), []]
+                groups.append(current)
+                continue
+        elif low == "end" and depth:
+            depth -= 1
+            if depth == 0:
+                current = None
+                continue
+        (current[1] if current else outside).append(line)
+    result = [(title, "\n".join(body)) for title, body in groups]
+    if any("->" in l or "→" in l for l in outside):
+        result.append(("各流程之間的關係", "\n".join(outside)))
+    return result
+
+
 # ---------------------------------------------------------------------------
 # ER 圖：從 DDL 解析表、欄位、主鍵、外鍵、欄位說明
 # ---------------------------------------------------------------------------
@@ -247,21 +270,28 @@ def check(code: str) -> tuple:
 # ---------------------------------------------------------------------------
 
 class Tools:
-    async def draw_mermaid(self, kind: str, content: str, direction: str = "TD") -> str:
+    async def draw_mermaid(self, kind: str, content: str, direction: str = "TD", separate: bool = True) -> str:
         """
         產生語法正確的 Mermaid 圖。
         kind="流程圖"：content 一行一條流程，用 -> 連接（失敗或例外路徑用虛線 -.->），連線文字寫在冒號後，例如
           「開始 -> 填寫請假單 -> {主管審核}」換行「{主管審核} -> 結束 : 同意」。
           {文字} 是判斷、[(文字)] 是資料庫；開始、結束與問號結尾的文字會自動套用形狀。
-          要分組時用「subgraph 名稱」開始、「end」結束。
+          有多個流程時，每個流程用「subgraph 名稱」開始、「end」結束，工具會把每個流程拆成獨立的一張圖。
         kind="ER圖"：content 放資料表的 DDL（CREATE TABLE、ALTER TABLE ... FOREIGN KEY、COMMENT ON COLUMN）。
         :param kind: 流程圖 或 ER圖
         :param content: 流程內容或 DDL
         :param direction: 流程圖方向，TD 由上到下、LR 由左到右
+        :param separate: 有多個 subgraph 時是否拆成多張圖（預設拆開，設為 false 才畫在同一張）
         """
         if "er" in kind.lower():
             code = er_diagram(content)
             return _reply(code) if code else "沒有找到 CREATE TABLE，請提供資料表的 DDL。"
+        groups = split_groups(content) if separate else []
+        if len(groups) > 1:
+            blocks = [(title, flowchart(body, direction)) for title, body in groups]
+            blocks = [(t, c) for t, c in blocks if c]
+            return (f"共 {len(blocks)} 張圖，請依序把每個標題與程式碼區塊原封不動放進回覆：\n\n" +
+                    "\n\n".join(f"### {t}\n\n```mermaid\n{c}\n```" for t, c in blocks))
         code = flowchart(content, direction)
         return _reply(code) if code else "沒有找到流程，請用「步驟A -> 步驟B」的格式，一行一條。"
 

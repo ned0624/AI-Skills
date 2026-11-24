@@ -227,29 +227,44 @@ def _mermaid(edges: list) -> str:
     return "\n".join(lines)
 
 
-def combined_mermaid(parsed: list) -> str:
-    """多個 Kettle 檔畫成一張圖：每個檔案一個分組，作業呼叫的轉換或作業用虛線連到該檔案的分組。"""
+def call_map_mermaid(parsed: list) -> str:
+    """檔案呼叫關係圖：每個檔案一個方塊，箭頭表示作業呼叫哪個轉換或作業（各檔案的步驟另外各畫一張）。"""
     def esc(text):
         return str(text).replace('"', "#quot;")
 
-    lines, ids, groups = ["flowchart TD"], {}, {}
-    for fi, (fname, info) in enumerate(parsed):
-        groups[fname] = f"f{fi}"
-        lines.append(f'    subgraph f{fi}["{esc(fname)}"]')
-        for j, n in enumerate(info["nodes"]):
-            ids[(fname, n)] = f"f{fi}n{j}"
-            lines.append(f'        f{fi}n{j}["{esc(n)}"]')
-        for a, b, label in info["edges"]:
-            if (fname, a) in ids and (fname, b) in ids:
-                arrow = "-.->" if label in ("失敗時", "錯誤資料") else "-->"
-                mid = f' {arrow}|"{esc(label)}"| ' if label else f" {arrow} "
-                lines.append(f"        {ids[(fname, a)]}{mid}{ids[(fname, b)]}")
-        lines.append("    end")
+    ids = {fname: f"f{i}" for i, (fname, _) in enumerate(parsed)}
+    lines = ["flowchart LR"]
+    for fname, info in parsed:
+        shape = ("([", "])") if info["kind"] == "作業" else ("[", "]")
+        lines.append(f'    {ids[fname]}{shape[0]}"{info["kind"]}：{esc(fname)}"{shape[1]}')
+    missing = {}
     for fname, info in parsed:
         for entry, target in info["entry_files"].items():
-            if target in groups and (fname, entry) in ids:
-                lines.append(f'    {ids[(fname, entry)]} -.->|"執行"| {groups[target]}')
-    return "```mermaid\n" + "\n".join(lines) + "\n```"
+            if target not in ids:
+                missing.setdefault(target, f"m{len(missing)}")
+                lines.append(f'    {missing[target]}["{esc(target)}（未上傳）"]')
+            lines.append(f'    {ids[fname]} -->|"{esc(entry)}"| {ids.get(target, missing.get(target))}')
+    return "```mermaid\n" + "\n".join(dict.fromkeys(lines)) + "\n```"
+
+
+def call_order(parsed: list) -> list:
+    """依呼叫關係排序：先放作業，再依被呼叫的順序放轉換與子作業。"""
+    by_name = dict(parsed)
+    called = [t for _, info in parsed for t in info["entry_files"].values()]
+    roots = [f for f, info in parsed if info["kind"] == "作業" and f not in called] or [parsed[0][0]]
+    order = []
+
+    def visit(fname):
+        if fname in order or fname not in by_name:
+            return
+        order.append(fname)
+        for target in by_name[fname]["entry_files"].values():
+            visit(target)
+
+    for r in roots:
+        visit(r)
+    order += [f for f, _ in parsed if f not in order]
+    return order
 
 
 # ---------------------------------------------------------------------------
@@ -581,11 +596,11 @@ class Tools:
                     raw_bytes = f.read()
                 digest = hashlib.sha256(raw_bytes).hexdigest()
                 title = f"{entry['name']} 流程"
-                if len(entries) > 1:  # 畫整體流程圖用；解析很快，不影響記憶的使用
+                if len(entries) > 1:  # 畫檔案呼叫關係圖用；解析很快，不影響記憶的使用
                     parsed.append((entry["name"], analyze_kettle_xml(raw_bytes.decode("utf-8", errors="replace"), entry["name"])))
                 cached = stored.get(title)
                 if cached and cached.get("sha256") == digest and not refresh:
-                    results.append(cached["content"] + "\n\n> （從這個對話的記憶取出，檔案內容沒有變更，未重新解析）")
+                    results.append((entry["name"], cached["content"] + "\n\n> （從這個對話的記憶取出，檔案內容沒有變更，未重新解析）"))
                     referenced += cached.get("referenced_files", [])
                     continue
 
@@ -596,7 +611,7 @@ class Tools:
                     self._put(mem, title, info["overview"], sha256=digest, source=entry["name"],
                               referenced_files=info["referenced_files"])
                     self._put(mem, f"{entry['name']} 步驟設定", info["details"], sha256=digest, source=entry["name"])
-                results.append(info["overview"])
+                results.append((entry["name"], info["overview"]))
 
             await self._status(__event_emitter__, "Kettle 檔案解析完成", done=True)
             uploaded = {e["name"] for e in self._entries(__files__)}
@@ -607,14 +622,18 @@ class Tools:
             if mem:
                 tail.append("> 各步驟的詳細設定（SQL、欄位對應等）已存入記憶，需要時用 "
                             "read_chat_memory(title=\"檔名 步驟設定\") 讀取。")
+            sections = [text for _, text in results]
             if parsed:
-                overall = ("# 整體流程圖（所有上傳的 Kettle 檔）\n"
-                           "> 每個檔案是一個分組，虛線「執行」表示作業呼叫該檔案，虛線「失敗時」是失敗路徑。"
-                           "請直接使用這張圖，不要自己重畫。\n\n" + combined_mermaid(parsed))
-                results.insert(0, overall)
+                order = call_order(parsed)
+                sections = [text for name in order for n, text in results if n == name]
+                overall = ("# 檔案呼叫關係圖\n"
+                           "> 每個方塊是一個檔案，箭頭上的文字是作業中呼叫該檔案的項目。"
+                           "各檔案的步驟流程圖在下方各自一張，依執行順序排列：" + " → ".join(order) +
+                           "。畫圖時先放這張，再依序放各檔案的流程圖，不要合併成一張。\n\n" + call_map_mermaid(parsed))
+                sections.insert(0, overall)
                 if mem:
-                    self._put(mem, "整體流程圖", overall)
-            body = "\n\n---\n\n".join(results)
+                    self._put(mem, "檔案呼叫關係圖", overall)
+            body = "\n\n---\n\n".join(sections)
             return self._fit(body, "完整內容已存入記憶，可用 read_chat_memory 分批讀取。") + \
                 ("\n\n" + "\n".join(tail) if tail else "") + memory_note
         except Exception as e:
